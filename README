@@ -1,0 +1,5 @@
+This is a mirror of http://www.vim.org/scripts/script.php?script_id=26
+
+This script and dll (source included) allows you to send email from within vim (via MAPI). Supports To, CC, pulling in a signature file, and adding a file attachment. Win32, obviously. Tested on Win2k only so far.
+
+Enjoy!
