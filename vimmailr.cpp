@@ -60,10 +60,11 @@ BOOL ParseSendData(
 	const char* pszFile,
 	STRVEC& vTo, 
 	STRVEC& vCc, 
+	STRVEC& vBcc, 
 	std::string& sFrom, 
 	std::string& sSubj, 
 	std::string& sNote,
-	std::string& sAttach);
+	STRVEC& vAttachments);
 
 
 // Exported lib call
@@ -72,10 +73,10 @@ extern "C" _declspec(dllexport) char* VimSendMail(char* pszFile) {
 	static char szRet[256];
 
 	// Initial parse of incoming data
-	std::string sFrom, sSubj, sNote, sAttach;
-	STRVEC vTo, vCc;
+	std::string sFrom, sSubj, sNote;
+	STRVEC vTo, vCc, vBcc, vAttachments;
 	if (!ParseSendData((const char*)pszFile,
-		vTo, vCc, sFrom, sSubj, sNote, sAttach))
+		vTo, vCc, vBcc, sFrom, sSubj, sNote, vAttachments))
 		return "Failed to parse send data";
 
 	// Load MAPI
@@ -90,14 +91,15 @@ extern "C" _declspec(dllexport) char* VimSendMail(char* pszFile) {
 
 	recipFrom.Ptr()->ulRecipClass = MAPI_ORIG;
 
-	// Resolve To and Cc
-	int n, nTO = vTo.size(), nCC = vCc.size();
+	// Resolve To, Cc, and Bcc
+	int n, nTO = vTo.size(), nCC = vCc.size(), nBCC = vBcc.size();
 	std::vector<RecipDescHolder*> vecRecips;
 	MapiRecipDesc* pDesc;
 	for (n = 0; n < nTO; n++) {
 		pDesc = lib.Resolve(vTo[n].c_str());
 		if (!pDesc) {
-			sprintf(szRet, "Failed to resolve (to) address for %s", vTo[n].c_str());
+			sprintf(szRet, "Failed to resolve (to) address for %s",
+				vTo[n].c_str());
 			return szRet;
 		}
 		pDesc->ulRecipClass = MAPI_TO;
@@ -106,18 +108,29 @@ extern "C" _declspec(dllexport) char* VimSendMail(char* pszFile) {
 	for (n = 0; n < nCC; n++) {
 		pDesc = lib.Resolve(vCc[n].c_str());
 		if (!pDesc) {
-			sprintf(szRet, "Failed to resolve (cc) address for %s", vCc[n].c_str());
+			sprintf(szRet, "Failed to resolve (cc) address for %s",
+				vCc[n].c_str());
 			return szRet;
 		}
 		pDesc->ulRecipClass = MAPI_CC;
 		vecRecips.push_back(new RecipDescHolder(lib, pDesc));
 	}
+	for (n = 0; n < nBCC; n++) {
+		pDesc = lib.Resolve(vBcc[n].c_str());
+		if (!pDesc) {
+			sprintf(szRet, "Failed to resolve (bcc) address for %s",
+				vBcc[n].c_str());
+			return szRet;
+		}
+		pDesc->ulRecipClass = MAPI_BCC;
+		vecRecips.push_back(new RecipDescHolder(lib, pDesc));
+	}
 
 	// Put the MapiRecipDescs in a normal array
-	MapiRecipDesc* pRecips = new MapiRecipDesc[nTO + nCC];
+	MapiRecipDesc* pRecips = new MapiRecipDesc[nTO + nCC + nBCC];
 	std::auto_ptr<MapiRecipDesc> spRecips(pRecips);
-	memset(pRecips, 0, (nTO + nCC) * sizeof(MapiRecipDesc));
-	for (n = 0; n < (nTO + nCC); n++) {
+	memset(pRecips, 0, (nTO + nCC + nBCC) * sizeof(MapiRecipDesc));
+	for (n = 0; n < (nTO + nCC + nBCC); n++) {
 		pRecips[n].ulRecipClass = vecRecips[n]->Ptr()->ulRecipClass;
 		pRecips[n].lpszName     = vecRecips[n]->Ptr()->lpszName;
 		pRecips[n].lpszAddress  = vecRecips[n]->Ptr()->lpszAddress;
@@ -125,15 +138,17 @@ extern "C" _declspec(dllexport) char* VimSendMail(char* pszFile) {
 		pRecips[n].lpEntryID    = vecRecips[n]->Ptr()->lpEntryID;
 	}
 
-	// If there's an attachment
-	BOOL bAttach = FALSE;
-	MapiFileDesc attach;
-	memset(&attach, 0, sizeof(attach));
-	attach.nPosition = (ULONG)-1;
-	if (sAttach.size()) {
-		bAttach = TRUE;
-		attach.lpszPathName = (char*)sAttach.c_str();
-		//attach.lpszFileName = (char*)sAttach.c_str();
+	// Attachments?
+	int nAttachments = vAttachments.size();
+	MapiFileDesc* pAttachments = 0;
+	std::auto_ptr<MapiFileDesc> spAttach(pAttachments);
+	if (nAttachments) {
+		pAttachments = new MapiFileDesc[nAttachments];
+		memset(pAttachments, 0, sizeof(MapiFileDesc) * nAttachments);
+		for (n = 0; n < nAttachments; n++) {
+			pAttachments[n].lpszPathName = (char*)vAttachments[n].c_str();
+			pAttachments[n].nPosition = (ULONG)-1;
+		}
 	}
 
 	// Construct the message
@@ -143,11 +158,9 @@ extern "C" _declspec(dllexport) char* VimSendMail(char* pszFile) {
 	message.lpszNoteText = (char*)sNote.c_str();
 	message.lpOriginator = recipFrom.Ptr();
 	message.lpRecips     = pRecips;
-	message.nRecipCount  = nTO + nCC;
-	if (bAttach) {
-		message.nFileCount = 1;
-		message.lpFiles = &attach;
-	}
+	message.nRecipCount  = nTO + nCC + nBCC;
+	message.nFileCount   = nAttachments;
+	message.lpFiles      = pAttachments;
 
 	// And go
 	ULONG rc = lib.Send(&message);
@@ -240,10 +253,11 @@ BOOL ParseSendData(
 	const char* pszFile,
 	STRVEC& vTo, 
 	STRVEC& vCc, 
+	STRVEC& vBcc, 
 	std::string& sFrom, 
 	std::string& sSubj, 
 	std::string& sNote,
-	std::string& sAttach) {
+	STRVEC& vAttachments) {
 
 	// How big is the file?
 	struct _stat stats;
@@ -263,7 +277,7 @@ BOOL ParseSendData(
 	std::auto_ptr<char> spMem(pMem); // this'll handle freeing it for us
 	memset(pMem, 0, nSize+1);
 
-	// Try to open for reading
+	// Open for reading
 	HANDLE hFile = CreateFile(pszFile, GENERIC_READ, FILE_SHARE_READ,
 		NULL, OPEN_EXISTING, 0, NULL);
 	if (INVALID_HANDLE_VALUE == hFile) {
@@ -290,14 +304,17 @@ BOOL ParseSendData(
 	char* pt;
 	size_t n = 0;
 	size_t pos = 0; // current position in pMem
-
+	static const char cCR = 0x0D;
+	static const char cLF = 0x0A;
 
 	// Get 'To:'
 	bOK = FALSE;
 	while ((n < (nSize - pos)) && (n < knWORK)) {
 		szWork[n] = pMem[pos++];
-		if ('\r' == szWork[n]) {
+		if (cLF == szWork[n]) {
 			szWork[n] = '\0';
+			if ((n > 0) && (cCR == szWork[n-1]))
+				szWork[--n] = '\0';
 			bOK = TRUE;
 			break;
 		}
@@ -309,7 +326,7 @@ BOOL ParseSendData(
 		return FALSE;
 	}
 
-	pt = strtok(&szWork[3], ";");
+	pt = strtok(&szWork[4], ";");
 	while ((pt) && (strchr(pt, '@'))) {
 		_RPT1(_CRT_WARN, "to - %s\n", pt);
 		vTo.push_back(std::string(pt));
@@ -323,28 +340,28 @@ BOOL ParseSendData(
 	}
 
 
-
 	// Get 'cc:'
-	pos++;
 	n = 0;
 	bOK = FALSE;
 	while ((n < (nSize - pos)) && (n < knWORK)) {
 		szWork[n] = pMem[pos++];
-		if ('\r' == szWork[n]) {
+		if (cLF == szWork[n]) {
 			szWork[n] = '\0';
+			if ((n > 0) && (cCR == szWork[n-1]))
+				szWork[--n] = '\0';
 			bOK = TRUE;
 			break;
 		}
 		n++;
 	}
 
-	if ((!bOK) || (n < 3) || (strnicmp(szWork, "CC:", 3))) {
+	if ((!bOK) || (n < 4) || (strnicmp(szWork, "CC: ", 4))) {
 		_RPT0(_CRT_WARN, "Failed to get CC: field\n");
 		return FALSE;
 	}
 
-	if (n > 3) {
-		pt = strtok(&szWork[3], ";");
+	if (n > 4) {
+		pt = strtok(&szWork[4], ";");
 		while ((pt) && (strchr(pt, '@'))) {
 			_RPT1(_CRT_WARN, "cc - %s\n", pt);
 			vCc.push_back(std::string(pt));
@@ -353,14 +370,45 @@ BOOL ParseSendData(
 	}
 
 
-	// Get 'From:'
-	pos++;
+	// Get 'bcc:'
 	n = 0;
 	bOK = FALSE;
 	while ((n < (nSize - pos)) && (n < knWORK)) {
 		szWork[n] = pMem[pos++];
-		if ('\r' == szWork[n]) {
+		if (cLF == szWork[n]) {
 			szWork[n] = '\0';
+			if ((n > 0) && (cCR == szWork[n-1]))
+				szWork[--n] = '\0';
+			bOK = TRUE;
+			break;
+		}
+		n++;
+	}
+
+	if ((!bOK) || (n < 5) || (strnicmp(szWork, "BCC: ", 5))) {
+		_RPT0(_CRT_WARN, "Failed to get BCC: field\n");
+		return FALSE;
+	}
+
+	if (n > 5) {
+		pt = strtok(&szWork[5], ";");
+		while ((pt) && (strchr(pt, '@'))) {
+			_RPT1(_CRT_WARN, "bcc - %s\n", pt);
+			vBcc.push_back(std::string(pt));
+			pt = strtok(NULL, ";");
+		}
+	}
+
+
+	// Get 'From:'
+	n = 0;
+	bOK = FALSE;
+	while ((n < (nSize - pos)) && (n < knWORK)) {
+		szWork[n] = pMem[pos++];
+		if (cLF == szWork[n]) {
+			szWork[n] = '\0';
+			if ((n > 0) && (cCR == szWork[n-1]))
+				szWork[--n] = '\0';
 			bOK = TRUE;
 			break;
 		}
@@ -378,19 +426,20 @@ BOOL ParseSendData(
 
 	// Get 'Subject:'
 	n = 0;
-	pos++;
 	bOK = FALSE;
 	while ((n < (nSize - pos)) && (n < knWORK)) {
 		szWork[n] = pMem[pos++];
-		if ('\r' == szWork[n]) {
+		if (cLF == szWork[n]) {
 			szWork[n] = '\0';
+			if ((n > 0) && (cCR == szWork[n-1]))
+				szWork[--n] = '\0';
 			bOK = TRUE;
 			break;
 		}
 		n++;
 	}
 
-	if ((bOK) && (n > 10) && (!strnicmp(szWork, "SUBJECT: ", 9))) {
+	if ((bOK) && (n > 9) && (!strnicmp(szWork, "SUBJECT: ", 9))) {
 		sSubj = &szWork[9];
 	}
 	else {
@@ -398,11 +447,12 @@ BOOL ParseSendData(
 		return FALSE;
 	}
 
-	// Whatever remains is the message text
-	pos++;
+	// Whatever remains is the message text. The "AttachFile[...]"
+	// markers, if any, are included in the message text.
 	sNote = &pMem[pos];
 
-	// Is there an attachment?
+	// Any attachments?
+/*
 	pt = strstr(&pMem[pos], "AttachFile[");
 	if (pt) {
 		pt = strchr(pt, '[');
@@ -419,7 +469,34 @@ BOOL ParseSendData(
 				sAttach = szWork;
 		}
 	}
+*/
+
+	pt = strstr(&pMem[pos], "AttachFile[");
+	while (pt) {
+		pt = strchr(pt, '[');
+		pt++;
+		n = strlen(pt);
+		if ((n) && (strchr(pt, ']'))) {
+			memset(szWork, 0, sizeof(szWork));
+			n = 0;
+			while (n < _MAX_PATH) {
+				szWork[n] = pt[n];
+				if (']' == szWork[n]) {
+					szWork[n] = '\0';
+					bOK = TRUE;
+					break;
+				}
+				n++;
+			}
+			if (bOK && n)
+				vAttachments.push_back(szWork);
+		}
+		pt = strstr(pt, "AttachFile[");
+	}
 
 	return TRUE;
 }
+
+
+
 
