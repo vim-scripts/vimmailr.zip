@@ -309,7 +309,7 @@ BOOL ParseSendData(
 
 	// Get 'To:'
 	bOK = FALSE;
-	while ((n < (nSize - pos)) && (n < knWORK)) {
+	while ((pos < nSize) && (n < knWORK)) {
 		szWork[n] = pMem[pos++];
 		if (cLF == szWork[n]) {
 			szWork[n] = '\0';
@@ -343,7 +343,7 @@ BOOL ParseSendData(
 	// Get 'cc:'
 	n = 0;
 	bOK = FALSE;
-	while ((n < (nSize - pos)) && (n < knWORK)) {
+	while ((pos < nSize) && (n < knWORK)) {
 		szWork[n] = pMem[pos++];
 		if (cLF == szWork[n]) {
 			szWork[n] = '\0';
@@ -373,7 +373,7 @@ BOOL ParseSendData(
 	// Get 'bcc:'
 	n = 0;
 	bOK = FALSE;
-	while ((n < (nSize - pos)) && (n < knWORK)) {
+	while ((pos < nSize) && (n < knWORK)) {
 		szWork[n] = pMem[pos++];
 		if (cLF == szWork[n]) {
 			szWork[n] = '\0';
@@ -403,7 +403,7 @@ BOOL ParseSendData(
 	// Get 'From:'
 	n = 0;
 	bOK = FALSE;
-	while ((n < (nSize - pos)) && (n < knWORK)) {
+	while ((pos < nSize) && (n < knWORK)) {
 		szWork[n] = pMem[pos++];
 		if (cLF == szWork[n]) {
 			szWork[n] = '\0';
@@ -427,7 +427,7 @@ BOOL ParseSendData(
 	// Get 'Subject:'
 	n = 0;
 	bOK = FALSE;
-	while ((n < (nSize - pos)) && (n < knWORK)) {
+	while ((pos < nSize) && (n < knWORK)) {
 		szWork[n] = pMem[pos++];
 		if (cLF == szWork[n]) {
 			szWork[n] = '\0';
@@ -439,64 +439,44 @@ BOOL ParseSendData(
 		n++;
 	}
 
-	if ((bOK) && (n > 9) && (!strnicmp(szWork, "SUBJECT: ", 9))) {
-		sSubj = &szWork[9];
-	}
-	else {
+	if ((!bOK) || (n < 9) || (strnicmp(szWork, "SUBJECT: ", 9))) {
 		_RPT0(_CRT_WARN, "Failed to get SUBJECT: field\n");
 		return FALSE;
 	}
 
+	if (n > 9)
+		sSubj = &szWork[9];
+
 	// Whatever remains is the message text. The "AttachFile[...]"
 	// markers, if any, are included in the message text.
-	sNote = &pMem[pos];
+	if (pos < nSize) {
+		sNote = &pMem[pos];
 
-	// Any attachments?
-/*
-	pt = strstr(&pMem[pos], "AttachFile[");
-	if (pt) {
-		pt = strchr(pt, '[');
-		pt++;
-		n = strlen(pt);
-		if ((n) && (strchr(pt, ']'))) {
-			memset(szWork, 0, sizeof(szWork));
-			pos = 0;
-			while ((pos < n) && (pt[pos] != ']') && (pos < _MAX_PATH)) {
-				szWork[pos] = pt[pos];
-				pos++;
-			}
-			if (strlen(szWork))
-				sAttach = szWork;
-		}
-	}
-*/
-
-	pt = strstr(&pMem[pos], "AttachFile[");
-	while (pt) {
-		pt = strchr(pt, '[');
-		pt++;
-		n = strlen(pt);
-		if ((n) && (strchr(pt, ']'))) {
-			memset(szWork, 0, sizeof(szWork));
-			n = 0;
-			while (n < _MAX_PATH) {
-				szWork[n] = pt[n];
-				if (']' == szWork[n]) {
-					szWork[n] = '\0';
-					bOK = TRUE;
-					break;
+		// Any attachments?
+		pt = strstr(&pMem[pos], "AttachFile[");
+		while (pt) {
+			pt = strchr(pt, '[');
+			pt++;
+			n = strlen(pt);
+			if ((n) && (strchr(pt, ']'))) {
+				memset(szWork, 0, sizeof(szWork));
+				n = 0;
+				while (n < _MAX_PATH) {
+					szWork[n] = pt[n];
+					if (']' == szWork[n]) {
+						szWork[n] = '\0';
+						bOK = TRUE;
+						break;
+					}
+					n++;
 				}
-				n++;
+				if (bOK && n)
+					vAttachments.push_back(szWork);
 			}
-			if (bOK && n)
-				vAttachments.push_back(szWork);
+			pt = strstr(pt, "AttachFile[");
 		}
-		pt = strstr(pt, "AttachFile[");
 	}
 
 	return TRUE;
 }
-
-
-
 
